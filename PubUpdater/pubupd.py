@@ -1,19 +1,92 @@
 #!/usr/bin/env python3
 
-#import yaml
-from packaging import version
-import json
-import requests
-from colorama import Fore, Back, Style
-import ruamel.yaml
-import sys
 import argparse
+import json
 import os
+import sys
+import io
+import gzip
+
+
+import mistune
+import requests
+import ruamel.yaml
+from colorama import Back, Fore, Style
+# import yaml
+from packaging import version
+
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
+from urllib import request
+
+import pkg_resources
+from pyfiglet import Figlet
 
 
 def main():
+    def parse_cl_md(file_data):
+        bs = BeautifulSoup(mistune.markdown(file_data), features="lxml")
+        changelog = {}
+        hTag = None
+        for row in bs.findAll('h1'):
+            if isinstance(version.parse(row.text), version.Version):
+                hTag = 'h1'
+                break
+        if hTag == None:
+            for row in bs.findAll('h2'):
+                if isinstance(version.parse(row.text), version.Version):
+                    hTag = 'h2'
+                    break
+
+        if hTag == None:
+            return None
+
+        for row in bs.findAll(hTag):
+            v = row.text
+            changes = []
+            ulTag = row.find_next_sibling('ul')
+            for liTag in ulTag.findAll('li'):
+                changes.append(liTag.text.replace('\n', ' '))
+            changelog[v] = changes
+        return changelog
+
+    def get_cl(homepage):
+        o = urlparse(homepage)
+        if o.netloc != 'github.com':
+            return None
+        # api_url = f'https://raw.githubusercontent.com{o.path.replace("/tree/", "/blob/master/")}/master/CHANGELOG.md'
+        if "/blob/" in homepage or "/tree/" in homepage:
+            api_url = homepage.replace(
+                "/blob/", "/raw/").replace("/tree/", "/raw/")
+        else:
+            api_url = homepage + "/raw/master"
+        api_url += "/CHANGELOG.md"
+        response = requests.get(api_url)
+
+        if response.status_code == 200:
+            return parse_cl_md(response.content.decode('utf-8'))
+        else:
+            return None
+
+    def get_cl_from_archive(url):
+        response = request.urlopen(url)
+        compressed_file = io.BytesIO(response.read())
+        decompressed_file = gzip.GzipFile(fileobj=compressed_file)
+
+    def print_cl(cl, current_version):
+        printed = False
+        if isinstance(cl, dict):
+            for v in cl:
+                if version.parse(v) > current_version:
+                    print(f'{Fore.YELLOW}[{v}]{Style.RESET_ALL}')
+                    printed = True
+                    for item in cl[v]:
+                        print(f' * {item}')
+                        printed = True
+        if not printed:
+            print(f'{Fore.YELLOW}Unable to determine changelog{Style.RESET_ALL}')
+
     def is_dir(dirname):
-        """Checks if a path is an actual directory"""
         fname = os.path.abspath(dirname) + '/pubspec.yaml'
         if not os.path.isdir(dirname):
             msg = "{0} is not a directory".format(dirname)
@@ -25,25 +98,35 @@ def main():
             return dirname
 
     def get_args():
-        """Get CLI arguments and options"""
-        parser = argparse.ArgumentParser(description="""do something""")
+        app_version = pkg_resources.require("pubupd")[0].version
+        f = Figlet(font='slant')
+        print(f.renderText('pubupd'))
+        print(f'v{app_version}')
+        parser = argparse.ArgumentParser(
+            description=f'Utility to update dependencies in flutter project\'s pubspec.yaml')
 
-        parser.add_argument('dir', help="The folder of alignments", nargs=1,
-                            type=is_dir)
-        return parser
+        parser.add_argument('dir', help="The directory of flutter project containing pubspec.yaml", nargs=1,
+                            type=is_dir, )
+        parser.add_argument('-c', '--change-log',
+                            action='store_true', help="Display changelog")
+        parser.add_argument('-a', '--display-all',
+                            action='store_true', help="Display all packages including updated ones")
+        parser.add_argument('-u', '--update-pubspec',
+                            action='store_true', help="Update pubspec.yaml file with latest versions")
+        return parser.parse_args()
 
-    def get_latest_version(package):
+    def get_package_info(package):
 
         api_url = 'https://pub.dev/api/packages/' + package
         response = requests.get(api_url)
 
         if response.status_code == 200:
-            return json.loads(response.content.decode('utf-8'))['latest']['version']
+            return json.loads(response.content.decode('utf-8'))
         else:
             return None
 
-    parser = get_args()
-    project = os.path.abspath(parser.parse_args().dir[0])
+    args = get_args()
+    project = os.path.abspath(args.dir[0])
     fname = project + '/pubspec.yaml'
     stream = open(fname, 'r')
     yaml = ruamel.yaml.YAML()  # defaults to round-trip if no parameters given
@@ -54,15 +137,23 @@ def main():
             continue
         if type(dep[package]) is not str:
             continue
+        package_info = get_package_info(package)
+        # print(package_info['latest']['pubspec'])
         cv = version.parse(dep[package].replace('^', ''))
-        lv = version.parse(get_latest_version(package))
+        lv = version.parse(package_info['latest']['version'])
+        homepage = package_info['latest']['pubspec']['homepage']
         outdated = lv > cv
         if outdated:
             data['dependencies'][package] = '^' + str(lv)
             print(
                 f'{Fore.BLUE}[{package}]{Style.RESET_ALL} {Fore.RED}{str(cv)}{Style.RESET_ALL} -> {Fore.GREEN}{str(lv)}{Style.RESET_ALL} (Update available)')
-        else:
+            if args.change_log:
+                cl = get_cl(homepage)
+                print_cl(cl, cv)
+        elif args.display_all:
             print(
                 f'{Fore.BLUE}[{package}]{Style.RESET_ALL} {Fore.GREEN}{str(cv)}{Style.RESET_ALL} (latest)')
-    new_file = open(project + "/pubspec_new.yaml", 'w')
-    yaml.dump(data, new_file)
+
+    if args.update_pubspec:
+        new_file = open(project + "/pubspec_new.yaml", 'w')
+        yaml.dump(data, new_file)
