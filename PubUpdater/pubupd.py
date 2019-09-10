@@ -6,7 +6,7 @@ import os
 import sys
 import io
 import gzip
-
+import traceback
 
 import mistune
 import requests
@@ -113,10 +113,12 @@ def main():
                             action='store_true', help="Display all packages including updated ones")
         parser.add_argument('-u', '--update-pubspec',
                             action='store_true', help="Update pubspec.yaml file with latest versions")
+        parser.add_argument('-i', '--install',
+                            nargs='?', help="Install new dependency in pubspec.yaml")
+
         return parser.parse_args()
 
     def get_package_info(package):
-
         api_url = 'https://pub.dev/api/packages/' + package
         response = requests.get(api_url)
 
@@ -125,35 +127,67 @@ def main():
         else:
             return None
 
-    args = get_args()
-    project = os.path.abspath(args.dir[0])
-    fname = project + '/pubspec.yaml'
-    stream = open(fname, 'r')
-    yaml = ruamel.yaml.YAML()  # defaults to round-trip if no parameters given
-    data = yaml.load(stream)
-    dep = data['dependencies']
-    for package in dep:
-        if type(dep[package]) is dict:
-            continue
-        if type(dep[package]) is not str:
-            continue
-        package_info = get_package_info(package)
-        # print(package_info['latest']['pubspec'])
-        cv = version.parse(dep[package].replace('^', ''))
-        lv = version.parse(package_info['latest']['version'])
-        homepage = package_info['latest']['pubspec']['homepage']
-        outdated = lv > cv
-        if outdated:
-            data['dependencies'][package] = '^' + str(lv)
-            print(
-                f'{Fore.BLUE}[{package}]{Style.RESET_ALL} {Fore.RED}{str(cv)}{Style.RESET_ALL} -> {Fore.GREEN}{str(lv)}{Style.RESET_ALL} (Update available)')
-            if args.change_log:
-                cl = get_cl(homepage)
-                print_cl(cl, cv)
-        elif args.display_all:
-            print(
-                f'{Fore.BLUE}[{package}]{Style.RESET_ALL} {Fore.GREEN}{str(cv)}{Style.RESET_ALL} (latest)')
+    def update_pubspec(data, args):
+        dep = data['dependencies']
+        for package in dep:
+            if type(dep[package]) is dict:
+                continue
+            if type(dep[package]) is not str:
+                continue
+            package_info = get_package_info(package)
+            # print(package_info['latest']['pubspec'])
+            cv = version.parse(dep[package].replace('^', ''))
+            lv = version.parse(package_info['latest']['version'])
+            homepage = package_info['latest']['pubspec']['homepage']
+            outdated = lv > cv
+            if outdated:
+                data['dependencies'][package] = '^' + str(lv)
+                print(
+                    f'{Fore.BLUE}[{package}]{Style.RESET_ALL} {Fore.RED}{str(cv)}{Style.RESET_ALL} -> {Fore.GREEN}{str(lv)}{Style.RESET_ALL} (Update available)')
+                if args.change_log:
+                    cl = get_cl(homepage)
+                    print_cl(cl, cv)
+            elif args.display_all:
+                print(
+                    f'{Fore.BLUE}[{package}]{Style.RESET_ALL} {Fore.GREEN}{str(cv)}{Style.RESET_ALL} (latest)')
+        return data, None
 
-    if args.update_pubspec:
-        new_file = open(project + "/pubspec_new.yaml", 'w')
-        yaml.dump(data, new_file)
+    def add_dependency(data, package):
+        package_info = get_package_info(package)
+        if package_info is None:
+            return data, 'No such package exists'
+
+        lv = version.parse(package_info['latest']['version'])
+        data['dependencies'][package] = '^' + str(lv)
+        print(
+            f'Adding {package} version {Fore.GREEN}{str(lv)}{Style.RESET_ALL} to pubspec.yaml')
+        return data, None
+
+    def run():
+        args = get_args()
+        project = os.path.abspath(args.dir[0])
+        fname = project + '/pubspec.yaml'
+        stream = open(fname, 'r')
+        yaml = ruamel.yaml.YAML()  # defaults to round-trip if no parameters given
+        data = yaml.load(stream)
+        err = None
+        if args.install is not None:
+            data, err = add_dependency(data, args.install)
+        else:
+            data, err = update_pubspec(data, args)
+
+        if err is not None:
+            print(f'{Fore.RED}{err}{Style.RESET_ALL}')
+            sys.exit(1)
+
+        if args.update_pubspec:
+            new_file = open(project + "/pubspec.yaml", 'w')
+            yaml.dump(data, new_file)
+
+    try:
+        run()
+    except KeyboardInterrupt:
+        print("Shutdown requested...exiting")
+    except Exception:
+        traceback.print_exc(file=sys.stdout)
+    sys.exit(0)

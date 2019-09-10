@@ -7,7 +7,7 @@ long_description = "Utility to update dependencies in flutter project's pubspec.
 
 setup(
     name='pubupd',
-    version='1.0.2',
+    version='1.0.4',
     author='Vineet Kumar',
     author_email='v1n@outlook.com',
     url='https://github.com/v1nvn/pubupd',
