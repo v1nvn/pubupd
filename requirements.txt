@@ -3,7 +3,7 @@ requests==2.21.0
 packaging==19.0
 pyfiglet==0.8.post1
 colorama==0.4.1
-mistune==0.8.4
+mistune==2.0.3
 beautifulsoup4==4.8.0
 ruamel.yaml==0.16.5
 lxml==4.4.1
